@@ -1,0 +1,71 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtualenv
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.coverage
+htmlcov/
+*.cover
+.coverage.*
+.cache
+.pytest_cache/
+
+# PyCharm
+.idea/
+*.iml
+
+# VSCode
+.vscode/
+
+# macOS
+.DS_Store
+
+# logs
+*.log
+
+# Uvicorn reload
+*.reload
+
+# credentials, secrets
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.env
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# logs
+*.log
+
+# build/dist
+build/
+dist/
+*.egg-info/
