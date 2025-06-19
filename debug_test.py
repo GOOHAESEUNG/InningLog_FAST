@@ -104,62 +104,73 @@ class KboPlayerStatsCrawler:
         tables = self.driver.find_elements(By.CSS_SELECTOR, "table.tbl")
         logging.info(f"발견된 테이블 수: {len(tables)}")
 
-        # 1) '선수명' 컬럼이 있는 라인업 테이블 인덱스 찾기
+        # 1) 라인업 테이블 인덱스 (선수명 헤더)
         lineup_idxs = []
+        # 2) 타자 기록 테이블 인덱스 (타수, 안타 헤더)
+        hitter_idxs = []
+        # 3) 투수 기록 테이블 인덱스 (이닝, 자책 헤더)
+        pitcher_idxs = []
+
         for idx, tbl in enumerate(tables):
             hdrs = [th.text.strip() for th in tbl.find_elements(By.CSS_SELECTOR, "thead th")]
             if "선수명" in hdrs:
                 lineup_idxs.append(idx)
-
-        # 2) '타수','안타' 헤더가 있는 타자 기록 테이블 인덱스 찾기
-        hitter_idxs = []
-        for idx, tbl in enumerate(tables):
-            hdrs = [th.text.strip() for th in tbl.find_elements(By.CSS_SELECTOR, "thead th")]
             if "타수" in hdrs and "안타" in hdrs:
                 hitter_idxs.append(idx)
-
-        # 3) '이닝','자책' 헤더가 있는 투수 기록 테이블 인덱스 찾기
-        pitcher_idxs = []
-        for idx, tbl in enumerate(tables):
-            hdrs = [th.text.strip() for th in tbl.find_elements(By.CSS_SELECTOR, "thead th")]
             if "이닝" in hdrs and "자책" in hdrs:
                 pitcher_idxs.append(idx)
 
-        # 팀 순서: lineup_idxs 순서대로 away→home 이라고 가정
         team_codes = [away_team, home_team]
 
+        # ────────────────────────────────────────────────────────────────────────
         # 타자 파싱
         hitters = []
         for team, li_idx, st_idx in zip(team_codes, lineup_idxs, hitter_idxs):
-            name_rows = tables[li_idx].find_elements(By.CSS_SELECTOR, "tbody tr")
-            stat_rows = tables[st_idx].find_elements(By.CSS_SELECTOR, "tbody tr")
-            for nr, sr in zip(name_rows, stat_rows):
-                # 선수명 <th> 세 번째 칸
-                ths = nr.find_elements(By.TAG_NAME, "th")
-                player_name = ths[2].text.strip() if len(ths) >= 3 else ""
-                cols = sr.find_elements(By.TAG_NAME, "td")
+            # 각 테이블의 헤더에서 선수명/타수/안타 컬럼 위치 찾기
+            name_hdrs = tables[li_idx].find_elements(By.CSS_SELECTOR, "thead th")
+            name_col = next(i for i,h in enumerate(name_hdrs) if h.text.strip() == "선수명")
+
+            stat_hdrs = [th.text.strip() for th in tables[st_idx].find_elements(By.CSS_SELECTOR, "thead th")]
+            atb_col  = stat_hdrs.index("타수")
+            hit_col  = stat_hdrs.index("안타")
+
+            rows_names = tables[li_idx].find_elements(By.CSS_SELECTOR, "tbody tr")
+            rows_stats = tables[st_idx].find_elements(By.CSS_SELECTOR, "tbody tr")
+
+            for rn, rs in zip(rows_names, rows_stats):
+                cells_name = rn.find_elements(By.CSS_SELECTOR, "th, td")
+                player = cells_name[name_col].text.strip()
+
+                stats = rs.find_elements(By.TAG_NAME, "td")
+                atb   = int(stats[atb_col].text.strip() or 0)
+                hits  = int(stats[hit_col].text.strip() or 0)
+
                 hitters.append({
-                    "team":        team,
-                    "playerName":  player_name,
-                    "atBats":      int(cols[0].text.strip() or 0),
-                    "hits":        int(cols[1].text.strip() or 0),
+                    "team":       team,
+                    "playerName": player,
+                    "atBats":     atb,
+                    "hits":       hits
                 })
 
-        # 투수 파싱 (이전과 동일)
+        # ────────────────────────────────────────────────────────────────────────
+        # 투수 파싱
         pitchers = []
         for team, st_idx in zip(team_codes, pitcher_idxs):
-            for row in tables[st_idx].find_elements(By.CSS_SELECTOR, "tbody tr"):
+            rows = tables[st_idx].find_elements(By.CSS_SELECTOR, "tbody tr")
+            for row in rows:
                 cols = row.find_elements(By.TAG_NAME, "td")
-                if len(cols) < 16: continue
+                if len(cols) < 16:
+                    continue
                 pitchers.append({
-                    "team":       team,
-                    "playerName": cols[0].text.strip(),
-                    "innings":    str(self._parse_innings(cols[6].text)),
-                    "earnedRuns": int(cols[15].text.strip() or 0)
+                    "team":       team,                                      # AW/HM 그대로
+                    "playerName": cols[0].text.strip(),                     # 첫 td: 선수명
+                    "innings":    str(self._parse_innings(cols[6].text)),   # 7번째 td: 이닝
+                    "earnedRuns": int(cols[15].text.strip() or 0)           # 16번째 td: 자책
                 })
 
         logging.info(f"크롤링 완료: 투수 {len(pitchers)}명, 타자 {len(hitters)}명")
         return {"pitchers": pitchers, "hitters": hitters}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 테스트 및 DTO 로깅
 # ──────────────────────────────────────────────────────────────────────────────
@@ -178,33 +189,28 @@ def test_real_boxscore_urls():
         print(f"\n=== 테스트 {idx}: {game_id} ===")
         print(f"URL: {box_url}\n")
 
-        # game_id 에서 팀 코드 추출 (YYYYMMDD|AW|HM|X)
         away_code = game_id[8:10]
         home_code = game_id[10:12]
 
         stats = crawler.get_review_stats(box_url, away_code, home_code)
 
-        # DTO 변환
         pitcher_dtos = [
             PitcherStatDto(
                 team=p["team"],
                 playerName=p["playerName"],
-                innings=str(p["innings"]),
+                innings=p["innings"],
                 earnedRuns=p["earnedRuns"]
-            )
-            for p in stats["pitchers"]
+            ) for p in stats["pitchers"]
         ]
-        hitter_dtos  = [
+        hitter_dtos = [
             HitterStatDto(
                 team=h["team"],
                 playerName=h["playerName"],
                 atBats=h["atBats"],
                 hits=h["hits"]
-            )
-            for h in stats["hitters"]
+            ) for h in stats["hitters"]
         ]
 
-        # 로그에 DTO 찍기
         logging.info("▶ PitcherStatDto 리스트:")
         for dto in pitcher_dtos:
             logging.info(dto)
