@@ -1,64 +1,31 @@
-# crawler/schedule_selenium.py
 import re
-import time
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime
 from typing import List, Dict, Optional
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
-import logging
+
+from utils import create_chrome_driver, extract_game_id_from_url, generate_game_id_from_teams_date, to_kbo_date_format, safe_sleep
+from config import config
 
 logger = logging.getLogger(__name__)
 
 class KboScheduleCrawler:
     def __init__(self):
         """크롤러 초기화"""
-        self.driver = None
-        self._init_driver()
+        self.driver = create_chrome_driver(headless=True, driver_path=config.CHROME_DRIVER_PATH)
+        self.wait = WebDriverWait(self.driver, config.TIMEOUT)
     
-    def _init_driver(self):
-        """Chrome WebDriver 초기화"""
-        try:
-            chrome_options = Options()
-            chrome_options.add_argument("--headless=new")  # 헤드리스 모드
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            chrome_options.add_experimental_option('useAutomationExtension', False)
-            
-            # ChromeDriver 경로 설정 (필요시 수정)
-            # service = Service('/usr/local/bin/chromedriver')  # Mac/Linux
-            # self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            
-            self.driver = webdriver.Chrome(options=chrome_options)
-            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            
-            logger.info("Chrome WebDriver 초기화 완료")
-            
-        except Exception as e:
-            logger.error(f"WebDriver 초기화 실패: {e}")
-            raise
+    def __del__(self):
+        """소멸자 - WebDriver 종료"""
+        self.close()
     
     def close(self):
         """WebDriver 종료"""
-        if self.driver:
+        if hasattr(self, 'driver') and self.driver:
             self.driver.quit()
             logger.info("WebDriver 종료 완료")
-    
-    def to_kbo_date_format(self, input_date: str) -> str:
-        """날짜 형식 변환: YYYY-MM-DD -> MM.DD"""
-        try:
-            date_obj = datetime.strptime(input_date, "%Y-%m-%d")
-            return date_obj.strftime("%m.%d")
-        except ValueError as e:
-            logger.error(f"날짜 형식 변환 실패: {input_date} -> {e}")
-            raise
     
     def get_games_by_date(self, date_string: Optional[str] = None) -> List[Dict]:
         """특정 날짜의 KBO 경기 일정 조회"""
@@ -69,16 +36,17 @@ class KboScheduleCrawler:
             if not date_string or date_string.strip() == "":
                 date_string = datetime.now().strftime("%Y-%m-%d")
             
-            target_kbo_date = self.to_kbo_date_format(date_string)
+            target_kbo_date = to_kbo_date_format(date_string)
             url = f"https://www.koreabaseball.com/Schedule/Schedule.aspx?date={date_string}"
             
             logger.info(f"크롤링 시작: {url}")
+            logger.info(f"목표 날짜: {target_kbo_date}")
             
             self.driver.get(url)
             
             # 페이지 로딩 대기
-            wait = WebDriverWait(self.driver, 15)
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.tbl")))
+            self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.tbl")))
+            safe_sleep(2)  # 추가 대기
             
             # 테이블 행 조회
             rows = self.driver.find_elements(By.CSS_SELECTOR, "table.tbl tbody tr")
@@ -101,6 +69,8 @@ class KboScheduleCrawler:
                         current_date = first_td[:5]  # MM.DD 추출
                         is_target_date = current_date == target_kbo_date
                         
+                        logger.debug(f"새로운 날짜 발견: {current_date} (목표: {target_kbo_date}, 매치: {is_target_date})")
+                        
                         if not is_target_date:
                             continue
                         
@@ -108,14 +78,14 @@ class KboScheduleCrawler:
                         game = self._parse_first_game_row(tds, current_date)
                         if game:
                             games.append(game)
-                            logger.info(f"첫 번째 경기 파싱 성공: {game}")
+                            logger.info(f"첫 번째 경기 파싱 성공: {game['awayTeam']} vs {game['homeTeam']}")
                     
                     # 시간만 있는 행 (두 번째 이후 경기)
                     elif re.match(r"\d{2}:\d{2}", first_td) and is_target_date:
                         game = self._parse_subsequent_game_row(tds, current_date)
                         if game:
                             games.append(game)
-                            logger.info(f"후속 경기 파싱 성공: {game}")
+                            logger.info(f"후속 경기 파싱 성공: {game['awayTeam']} vs {game['homeTeam']}")
                 
                 except Exception as e:
                     logger.error(f"Row {row_index} 파싱 실패: {e}")
@@ -213,7 +183,7 @@ class KboScheduleCrawler:
         logger.debug("========================")
     
     def _parse_game_info(self, date: str, time: str, match_info: str, stadium: str, review_url: Optional[str]) -> Optional[Dict]:
-        """경기 정보 파싱"""
+        """경기 정보 파싱 (gameId 추출 포함)"""
         try:
             if "vs" not in match_info:
                 return None
@@ -246,44 +216,31 @@ class KboScheduleCrawler:
                     home_team = right_part[i:]
                     break
             
-            away_score_int = int(away_score)
-            home_score_int = int(home_score)
+            away_score_int = int(away_score) if away_score else 0
+            home_score_int = int(home_score) if home_score else 0
             
-            return {
+            # gameId 추출 또는 생성
+            game_id = None
+            if review_url:
+                game_id = extract_game_id_from_url(review_url)
+            
+            if not game_id:
+                game_id = generate_game_id_from_teams_date(date, away_team.strip(), home_team.strip())
+            
+            result = {
                 "awayTeam": away_team.strip(),
-                "homeTeam": home_team.strip(),
+                "homeTeam": home_team.strip(), 
                 "awayScore": away_score_int,
                 "homeScore": home_score_int,
                 "stadium": stadium,
                 "gameDateTime": time,
-                "boxscore_url": review_url
+                "boxscoreUrl": review_url,
+                "gameId": game_id  # 중요: gameId 포함!
             }
+            
+            logger.debug(f"경기 파싱 완료: {away_team} vs {home_team}, gameId: {game_id}")
+            return result
         
         except Exception as e:
             logger.error(f"경기 정보 파싱 실패: {match_info} -> {e}")
             return None
-    
-    def get_games_by_date_range(self, start_date: str, end_date: str) -> List[Dict]:
-        """날짜 범위의 KBO 경기 일정 조회"""
-        all_games = []
-        
-        try:
-            start = datetime.strptime(start_date, "%Y-%m-%d")
-            end = datetime.strptime(end_date, "%Y-%m-%d")
-            
-            current = start
-            while current <= end:
-                logger.info(f"크롤링 중: {current.strftime('%Y-%m-%d')}")
-                daily_games = self.get_games_by_date(current.strftime("%Y-%m-%d"))
-                all_games.extend(daily_games)
-                current += timedelta(days=1)
-                
-                # 서버 부하 방지를 위한 대기
-                time.sleep(1)
-        
-        except Exception as e:
-            logger.error(f"날짜 범위 조회 중 오류 발생: {start_date} ~ {end_date}, {e}")
-        
-        logger.info(f"전체 크롤링 완료: {len(all_games)}개 경기")
-        return all_games
-
