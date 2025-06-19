@@ -47,24 +47,24 @@ class KboPlayerStatsCrawler:
             "LT": "롯데",
             "HT": "한화", 
             "SS": "SSG",
-            "NC": "NC",
-            "KT": "KT",
+            "SK": "SSG",   # SK → SSG (구 SK)
+            "NC": "NC",    # NC 다이노스
+            "KT": "KT",    # KT 위즈
+            "LG": "LG",    # LG 트윈스
             "WS": "키움",  # WS (구 우리)
             "WO": "키움",  # WO (키움 히어로즈 또는 우리)
-            "LG": "LG",
             "OB": "두산",  # OB (구 OB베어스)
             "DS": "두산",  # DS (두산)
             "HH": "KIA",   # HH (구 해태)
             "KI": "KIA",   # KI (KIA)
             "SA": "삼성",  # SA (삼성)
-            "SK": "SSG",   # SK (구 SK)
             # 추가 가능한 코드들
             "LO": "롯데",
             "HW": "한화"
         }
         
         converted_name = team_code_map.get(team_code, team_code)
-        if converted_name == team_code:
+        if converted_name == team_code and team_code not in ["NC", "KT", "LG"]:
             logger.warning(f"알 수 없는 팀 코드: {team_code}")
         logger.debug(f"팀 코드 변환: {team_code} → {converted_name}")
         return converted_name
