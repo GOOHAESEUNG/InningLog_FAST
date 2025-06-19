@@ -83,13 +83,25 @@ class KboPlayerStatsCrawler:
         logging.info("Player Stats WebDriver 종료 완료")
 
     def _parse_innings(self, text: str) -> float:
-        t = text.strip()
-        if "/" in t:
-            n, d = t.split("/", 1)
+        """이닝을 정수, 분수, 또는 대분수 형태로 parsing"""
+        t = text.replace("\n", " ").strip()
+        # 대분수 (예: "1 1/3")
+        if " " in t and "/" in t:
+            parts = t.split(None, 1)
             try:
-                return float(n) / float(d)
+                whole = float(parts[0])
+                num, den = parts[1].split("/", 1)
+                return whole + float(num) / float(den)
             except:
-                return 0.0
+                pass
+        # 단순 분수 (예: "2/3")
+        if "/" in t:
+            try:
+                num, den = t.split("/", 1)
+                return float(num) / float(den)
+            except:
+                pass
+        # 소수 또는 정수
         try:
             return float(t)
         except:
@@ -104,12 +116,10 @@ class KboPlayerStatsCrawler:
         tables = self.driver.find_elements(By.CSS_SELECTOR, "table.tbl")
         logging.info(f"발견된 테이블 수: {len(tables)}")
 
-        # 1) 라인업 테이블 인덱스 (선수명 헤더)
-        lineup_idxs = []
-        # 2) 타자 기록 테이블 인덱스 (타수, 안타 헤더)
-        hitter_idxs = []
-        # 3) 투수 기록 테이블 인덱스 (이닝, 자책 헤더)
-        pitcher_idxs = []
+        # 각 테이블 인덱스 찾기
+        lineup_idxs = []   # '선수명' 있는 테이블
+        hitter_idxs = []   # '타수','안타' 있는 테이블
+        pitcher_idxs = []  # '이닝','자책' 있는 테이블
 
         for idx, tbl in enumerate(tables):
             hdrs = [th.text.strip() for th in tbl.find_elements(By.CSS_SELECTOR, "thead th")]
@@ -126,10 +136,11 @@ class KboPlayerStatsCrawler:
         # 타자 파싱
         hitters = []
         for team, li_idx, st_idx in zip(team_codes, lineup_idxs, hitter_idxs):
-            # 각 테이블의 헤더에서 선수명/타수/안타 컬럼 위치 찾기
+            # 선수명 컬럼 위치
             name_hdrs = tables[li_idx].find_elements(By.CSS_SELECTOR, "thead th")
             name_col = next(i for i,h in enumerate(name_hdrs) if h.text.strip() == "선수명")
 
+            # 통계 컬럼 위치
             stat_hdrs = [th.text.strip() for th in tables[st_idx].find_elements(By.CSS_SELECTOR, "thead th")]
             atb_col  = stat_hdrs.index("타수")
             hit_col  = stat_hdrs.index("안타")
@@ -138,8 +149,8 @@ class KboPlayerStatsCrawler:
             rows_stats = tables[st_idx].find_elements(By.CSS_SELECTOR, "tbody tr")
 
             for rn, rs in zip(rows_names, rows_stats):
-                cells_name = rn.find_elements(By.CSS_SELECTOR, "th, td")
-                player = cells_name[name_col].text.strip()
+                cells = rn.find_elements(By.CSS_SELECTOR, "th, td")
+                player = cells[name_col].text.strip() or ""
 
                 stats = rs.find_elements(By.TAG_NAME, "td")
                 atb   = int(stats[atb_col].text.strip() or 0)
@@ -162,10 +173,10 @@ class KboPlayerStatsCrawler:
                 if len(cols) < 16:
                     continue
                 pitchers.append({
-                    "team":       team,                                      # AW/HM 그대로
-                    "playerName": cols[0].text.strip(),                     # 첫 td: 선수명
-                    "innings":    str(self._parse_innings(cols[6].text)),   # 7번째 td: 이닝
-                    "earnedRuns": int(cols[15].text.strip() or 0)           # 16번째 td: 자책
+                    "team":       team,
+                    "playerName": cols[0].text.strip(),
+                    "innings":    str(self._parse_innings(cols[6].text)),
+                    "earnedRuns": int(cols[15].text.strip() or 0)
                 })
 
         logging.info(f"크롤링 완료: 투수 {len(pitchers)}명, 타자 {len(hitters)}명")
