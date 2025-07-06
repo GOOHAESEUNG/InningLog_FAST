@@ -120,7 +120,7 @@ def generate_game_id_from_teams_date(date_str: str, away_team: str, home_team: s
         home_code = team_mapping.get(home_team, home_team[:2].upper())
         
         # gameId 생성: YYYYMMDDHHA0 형식
-        game_id = f"{date_formatted}{home_code}{away_code}0"
+        game_id = f"{date_formatted}{away_code}{home_code}0"
         
         logging.debug(f"gameId 생성: {date_str} {away_team}vs{home_team} -> {game_id}")
         return game_id

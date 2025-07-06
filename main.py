@@ -1,317 +1,292 @@
-import sys
-import logging
-import pymysql
-from datetime import datetime
-from typing import List, Dict
+#!/usr/bin/env python3
+"""
+KBO 크롤링 메인 스크립트
+- 월별 일정 크롤링
+- 일일 경기 결과 업데이트  
+- 선수 기록 크롤링
+- 팀 순위 및 승률 크롤링
+"""
 
-from config import config
+import argparse
+import logging
+from datetime import datetime, timedelta
+
 from utils import setup_logging
-from schedule_crawler import KboScheduleCrawler
+from monthly_schedule_crawler import KboMonthlyScheduleCrawler
+from game_result_crawler import KboGameResultCrawler
 from player_stats_crawler import KboPlayerStatsCrawler
+from team_rank_crawler import KboTeamRankCrawler
 from data_sender import KboDataSender
 
-# 로깅 설정
-setup_logging(config.LOG_LEVEL)
-logger = logging.getLogger(__name__)
-
-class KboMainProcessor:
-    def __init__(self):
-        """메인 프로세서 초기화"""
-        self.schedule_crawler = None
-        self.stats_crawler = None
-        self.data_sender = KboDataSender()
-        
-    def __enter__(self):
-        """컨텍스트 매니저 진입"""
-        self.schedule_crawler = KboScheduleCrawler()
-        self.stats_crawler = KboPlayerStatsCrawler()
-        return self
-        
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """컨텍스트 매니저 종료 - 리소스 정리"""
-        if self.schedule_crawler:
-            self.schedule_crawler.close()
-        if self.stats_crawler:
-            self.stats_crawler.close()
-    
-    def process_schedule_only(self, date: str = None) -> bool:
-        """
-        경기 일정만 크롤링하고 저장
-        
-        Args:
-            date: 크롤링할 날짜 (YYYY-MM-DD), None이면 오늘
-            
-        Returns:
-            bool: 성공 여부
-        """
-        try:
-            # 날짜 설정
-            if not date:
-                date = datetime.now().strftime("%Y-%m-%d")
-            
-            logger.info(f"=== 경기 일정 크롤링 시작: {date} ===")
-            
-            # 1. Spring Boot 서버 연결 확인
-            if not self.data_sender.test_connection():
-                logger.error("Spring Boot 서버에 연결할 수 없습니다")
-                return False
-            
-            # 2. 경기 일정 크롤링
-            games = self.schedule_crawler.get_games_by_date(date)
-            
-            if not games:
-                logger.warning(f"{date} 날짜에 크롤링된 경기가 없습니다")
-                return True  # 경기가 없는 것은 정상
-            
-            # 3. Spring Boot로 경기 일정 전송
-            success = self.data_sender.send_schedule_to_spring(games, date)
-            
-            if success:
-                logger.info(f"✅ 경기 일정 처리 완료: {len(games)}경기")
-                return True
-            else:
-                logger.error("❌ 경기 일정 저장 실패")
-                return False
-                
-        except Exception as e:
-            logger.error(f"경기 일정 처리 중 오류: {e}")
-            return False
-    
-    def process_player_stats_only(self, date: str = None) -> Dict:
-        """
-        선수 기록만 크롤링하고 저장
-        
-        Args:
-            date: 처리할 날짜 (YYYY-MM-DD), None이면 오늘
-            
-        Returns:
-            dict: 처리 결과 통계
-        """
-        try:
-            # 날짜 설정
-            if not date:
-                date = datetime.now().strftime("%Y-%m-%d")
-                
-            logger.info(f"=== 선수 기록 크롤링 시작: {date} ===")
-            
-            # 1. DB에서 해당 날짜의 게임 조회
-            games = self.get_games_from_db(date)
-            
-            if not games:
-                logger.warning(f"{date} 날짜에 처리할 게임이 없습니다")
-                return {"total": 0, "success": 0, "failed": 0}
-            
-            # 2. 각 게임의 선수 기록 처리
-            success_count = 0
-            failed_count = 0
-            
-            for game in games:
-                if self.process_single_game_stats(game):
-                    success_count += 1
-                else:
-                    failed_count += 1
-            
-            result = {
-                "total": len(games),
-                "success": success_count,
-                "failed": failed_count
-            }
-            
-            logger.info(f"✅ 선수 기록 처리 완료: {result}")
-            return result
-            
-        except Exception as e:
-            logger.error(f"선수 기록 처리 중 오류: {e}")
-            return {"total": 0, "success": 0, "failed": 0}
-    
-    def process_full_workflow(self, date: str = None) -> bool:
-        """
-        전체 워크플로우: 경기 일정 → 선수 기록 순서로 처리
-        
-        Args:
-            date: 처리할 날짜 (YYYY-MM-DD), None이면 오늘
-            
-        Returns:
-            bool: 전체 성공 여부
-        """
-        try:
-            # 날짜 설정
-            if not date:
-                date = datetime.now().strftime("%Y-%m-%d")
-                
-            logger.info(f"=== KBO 전체 워크플로우 시작: {date} ===")
-            
-            # 1단계: 경기 일정 크롤링 및 저장
-            schedule_success = self.process_schedule_only(date)
-            if not schedule_success:
-                logger.error("경기 일정 처리 실패로 전체 워크플로우 중단")
-                return False
-            
-            # 2단계: 선수 기록 크롤링 및 저장
-            stats_result = self.process_player_stats_only(date)
-            
-            # 결과 요약
-            logger.info(f"🎯 전체 워크플로우 완료")
-            logger.info(f"   - 경기 일정: 성공")
-            logger.info(f"   - 선수 기록: {stats_result['success']}/{stats_result['total']} 성공")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"전체 워크플로우 중 오류: {e}")
-            return False
-    
-    def process_single_game_stats(self, game: Dict) -> bool:
-        """
-        단일 게임의 선수 기록 처리
-        
-        Args:
-            game: 게임 정보 딕셔너리
-            
-        Returns:
-            bool: 처리 성공 여부
-        """
-        game_id = game.get('game_id') or game.get('gameId')
-        boxscore_url = game.get('boxscore_url') or game.get('boxscoreUrl')
-        
-        if not game_id or not boxscore_url:
-            logger.warning(f"게임 정보 부족: gameId={game_id}, boxscoreUrl={boxscore_url}")
-            return False
-        
-        try:
-            logger.info(f"게임 {game_id} 선수 기록 처리 시작")
-            
-            # 1. 박스스코어 크롤링
-            stats_data = self.stats_crawler.get_review_stats(boxscore_url)
-            
-            if not stats_data['pitchers'] and not stats_data['hitters']:
-                logger.warning(f"게임 {game_id}: 크롤링된 선수 기록 없음")
-                return False
-            
-            # 2. Spring Boot API로 전송
-            success = self.data_sender.send_player_stats_to_spring(game_id, stats_data)
-            
-            if success:
-                logger.info(f"게임 {game_id} 선수 기록 처리 완료")
-                return True
-            else:
-                logger.error(f"게임 {game_id} 선수 기록 전송 실패")
-                return False
-                
-        except Exception as e:
-            logger.error(f"게임 {game_id} 처리 중 오류: {e}")
-            return False
-    
-    def get_games_from_db(self, date: str = None) -> List[Dict]:
-        """
-        DB에서 게임 정보를 조회합니다.
-        
-        Args:
-            date: 조회할 날짜 (YYYY-MM-DD), None이면 모든 게임
-            
-        Returns:
-            list: 게임 정보 리스트
-        """
-        connection = None
-        try:
-            # MySQL 연결
-            connection = pymysql.connect(**config.DB_CONFIG)
-            
-            with connection.cursor(pymysql.cursors.DictCursor) as cursor:
-                if date:
-                    # 특정 날짜의 게임만 조회 (boxscore_url이 있는 게임만)
-                    sql = """
-                    SELECT game_id, boxscore_url 
-                    FROM game 
-                    WHERE DATE(local_date_time) = %s 
-                    AND boxscore_url IS NOT NULL 
-                    AND boxscore_url != ''
-                    """
-                    cursor.execute(sql, (date,))
-                else:
-                    # boxscore_url이 있는 최근 게임들 조회
-                    sql = """
-                    SELECT game_id, boxscore_url 
-                    FROM game 
-                    WHERE boxscore_url IS NOT NULL 
-                    AND boxscore_url != ''
-                    ORDER BY local_date_time DESC 
-                    LIMIT 10
-                    """
-                    cursor.execute(sql)
-                
-                games = cursor.fetchall()
-                logger.info(f"DB에서 조회된 게임 수: {len(games)}")
-                return games
-                
-        except Exception as e:
-            logger.error(f"DB 조회 중 오류: {e}")
-            return []
-        finally:
-            if connection:
-                connection.close()
-
 def main():
-    """메인 함수"""
+    parser = argparse.ArgumentParser(description="KBO 데이터 크롤링 시스템")
+    subparsers = parser.add_subparsers(dest='command', help='실행할 명령어')
     
-    # 명령행 인수 처리
-    if len(sys.argv) < 2:
-        print("사용법:")
-        print("  python main.py schedule [날짜]     # 경기 일정만 크롤링")
-        print("  python main.py stats [날짜]        # 선수 기록만 크롤링") 
-        print("  python main.py full [날짜]         # 전체 워크플로우")
-        print("  python main.py test               # 연결 테스트")
-        print("")
-        print("예시:")
-        print("  python main.py schedule 2024-06-15")
-        print("  python main.py stats")
-        print("  python main.py full")
-        return
+    # 1. 월별 일정 크롤링 명령어
+    monthly_parser = subparsers.add_parser('monthly-schedule', help='월별 경기 일정 크롤링')
+    monthly_parser.add_argument('year_month', help='연월 (YYYY-MM)')
     
-    command = sys.argv[1].lower()
-    date = sys.argv[2] if len(sys.argv) > 2 else None
+    # 2. 일일 결과 업데이트 명령어  
+    daily_parser = subparsers.add_parser('daily-update', help='일일 경기 결과 및 선수 기록 업데이트')
+    daily_parser.add_argument('date', help='날짜 (YYYY-MM-DD)')
     
-    # 명령어별 실행
-    if command == "test":
-        # 연결 테스트
-        sender = KboDataSender()
-        if sender.test_connection():
-            print("✅ Spring Boot 서버 연결 성공")
-        else:
-            print("❌ Spring Boot 서버 연결 실패")
-            
-    elif command == "schedule":
-        # 경기 일정만 크롤링
-        with KboMainProcessor() as processor:
-            success = processor.process_schedule_only(date)
-            if success:
-                print("✅ 경기 일정 크롤링 완료")
-            else:
-                print("❌ 경기 일정 크롤링 실패")
-                sys.exit(1)
-                
-    elif command == "stats":
-        # 선수 기록만 크롤링
-        with KboMainProcessor() as processor:
-            result = processor.process_player_stats_only(date)
-            if result['total'] > 0:
-                print(f"✅ 선수 기록 크롤링 완료: {result['success']}/{result['total']} 성공")
-            else:
-                print("❌ 처리할 게임이 없습니다")
-                
-    elif command == "full":
-        # 전체 워크플로우
-        with KboMainProcessor() as processor:
-            success = processor.process_full_workflow(date)
-            if success:
-                print("✅ 전체 워크플로우 완료")
-            else:
-                print("❌ 전체 워크플로우 실패")
-                sys.exit(1)
-                
+    # 3. 선수 기록만 크롤링 명령어
+    stats_parser = subparsers.add_parser('player-stats', help='선수 기록만 크롤링')
+    stats_parser.add_argument('date', help='날짜 (YYYY-MM-DD)')
+    
+    # 4. 팀 순위 크롤링 명령어
+    rank_parser = subparsers.add_parser('team-rankings', help='팀 순위 및 승률 크롤링')
+    rank_parser.add_argument('--date', help='날짜 (YYYY-MM-DD), 생략시 현재 날짜', default=None)
+    
+    # 5. 팀 승률만 크롤링 명령어 (빠른 버전)
+    winrate_parser = subparsers.add_parser('team-winrates', help='팀 승률만 크롤링 (빠른 버전)')
+    winrate_parser.add_argument('--date', help='날짜 (YYYY-MM-DD), 생략시 현재 날짜', default=None)
+    
+    # 6. 전체 파이프라인 (기존 호환성)
+    full_parser = subparsers.add_parser('full', help='전체 파이프라인 (일정+결과+선수기록)')
+    full_parser.add_argument('date', help='날짜 (YYYY-MM-DD)')
+    
+    args = parser.parse_args()
+    
+    # 로깅 설정
+    setup_logging("INFO")
+    logger = logging.getLogger(__name__)
+    
+    if args.command == 'monthly-schedule':
+        run_monthly_schedule_crawling(args.year_month)
+    elif args.command == 'daily-update':
+        run_daily_update(args.date)
+    elif args.command == 'player-stats':
+        run_player_stats_only(args.date)
+    elif args.command == 'team-rankings':
+        run_team_rankings_crawling(args.date)
+    elif args.command == 'team-winrates':
+        run_team_winrates_only(args.date)
+    elif args.command == 'full':
+        run_full_pipeline(args.date)
     else:
-        print(f"알 수 없는 명령어: {command}")
-        sys.exit(1)
+        parser.print_help()
+
+def run_monthly_schedule_crawling(year_month: str):
+    """월별 경기 일정 크롤링 실행"""
+    logger = logging.getLogger(__name__)
+    logger.info(f"=== 월별 일정 크롤링 시작: {year_month} ===")
+    
+    try:
+        # 연월 파싱
+        year, month = map(int, year_month.split('-'))
+        
+        # 월별 일정 크롤러 실행
+        monthly_crawler = KboMonthlyScheduleCrawler()
+        schedule_games = monthly_crawler.get_monthly_schedule(year, month)
+        monthly_crawler.close()
+        
+        if not schedule_games:
+            logger.warning("수집된 경기 일정이 없습니다")
+            return
+        
+        # Spring으로 전송
+        data_sender = KboDataSender()
+        success = data_sender.send_monthly_schedule_to_spring(schedule_games, year_month)
+        
+        if success:
+            logger.info(f"✅ 월별 일정 크롤링 완료: {len(schedule_games)}경기")
+        else:
+            logger.error("❌ 월별 일정 전송 실패")
+            
+    except Exception as e:
+        logger.error(f"월별 일정 크롤링 중 오류: {e}")
+
+def run_daily_update(date: str):
+    """일일 경기 결과 업데이트 + 선수 기록 크롤링"""
+    logger = logging.getLogger(__name__)
+    logger.info(f"=== 일일 업데이트 시작: {date} ===")
+    
+    try:
+        # 1단계: 경기 결과 업데이트
+        result_crawler = KboGameResultCrawler()
+        game_results = result_crawler.update_game_results(date)
+        result_crawler.close()
+        
+        if not game_results:
+            logger.warning(f"{date} 날짜에 완료된 경기가 없습니다")
+            return
+        
+        # Spring으로 결과 업데이트 전송
+        data_sender = KboDataSender()
+        update_success = data_sender.update_game_results_to_spring(game_results, date)
+        
+        if not update_success:
+            logger.error("경기 결과 업데이트 실패")
+            return
+        
+        # 2단계: 박스스코어 URL이 있는 경기만 선수 기록 크롤링
+        player_crawler = KboPlayerStatsCrawler()
+        stats_success_count = 0
+        
+        for game in game_results:
+            if game.get("boxscoreUrl"):
+                logger.info(f"선수 기록 크롤링: {game['gameId']}")
+                
+                try:
+                    # 팀 코드 추출
+                    game_id = game["gameId"]
+                    away_code = game_id[8:10] if len(game_id) >= 12 else None
+                    home_code = game_id[10:12] if len(game_id) >= 12 else None
+                    
+                    # 선수 기록 크롤링
+                    stats = player_crawler.get_review_stats(
+                        game["boxscoreUrl"], 
+                        away_code, 
+                        home_code
+                    )
+                    
+                    # Spring으로 선수 기록 전송
+                    if stats["pitchers"] or stats["hitters"]:
+                        stats_success = data_sender.send_player_stats_to_spring(game["gameId"], stats)
+                        if stats_success:
+                            stats_success_count += 1
+                        
+                except Exception as e:
+                    logger.error(f"게임 {game['gameId']} 선수 기록 처리 실패: {e}")
+                    continue
+            else:
+                logger.debug(f"게임 {game['gameId']}: 박스스코어 URL 없음")
+        
+        player_crawler.close()
+        
+        logger.info(f"✅ 일일 업데이트 완료: 경기결과 {len(game_results)}경기, 선수기록 {stats_success_count}경기")
+        
+    except Exception as e:
+        logger.error(f"일일 업데이트 중 오류: {e}")
+
+def run_player_stats_only(date: str):
+    """선수 기록만 크롤링 (박스스코어 URL 기존 DB에서 조회)"""
+    logger = logging.getLogger(__name__)
+    logger.info(f"=== 선수 기록 크롤링 시작: {date} ===")
+    
+    try:
+        # Spring에서 박스스코어 URL 있는 경기 조회
+        data_sender = KboDataSender()
+        games_with_boxscore = data_sender.get_games_with_boxscore_urls(date)
+        
+        if not games_with_boxscore:
+            logger.warning(f"{date} 날짜에 박스스코어 URL이 있는 경기가 없습니다")
+            return
+        
+        # 선수 기록 크롤링
+        player_crawler = KboPlayerStatsCrawler()
+        stats_success_count = 0
+        
+        for game in games_with_boxscore:
+            logger.info(f"선수 기록 크롤링: {game['gameId']}")
+            
+            try:
+                # 팀 코드 추출
+                game_id = game["gameId"]
+                away_code = game_id[8:10] if len(game_id) >= 12 else None
+                home_code = game_id[10:12] if len(game_id) >= 12 else None
+                
+                # 선수 기록 크롤링
+                stats = player_crawler.get_review_stats(
+                    game["boxscoreUrl"], 
+                    away_code, 
+                    home_code
+                )
+                
+                # Spring으로 선수 기록 전송
+                if stats["pitchers"] or stats["hitters"]:
+                    stats_success = data_sender.send_player_stats_to_spring(game["gameId"], stats)
+                    if stats_success:
+                        stats_success_count += 1
+                        
+            except Exception as e:
+                logger.error(f"게임 {game['gameId']} 선수 기록 처리 실패: {e}")
+                continue
+        
+        player_crawler.close()
+        
+        logger.info(f"✅ 선수 기록 크롤링 완료: {stats_success_count}/{len(games_with_boxscore)}경기")
+        
+    except Exception as e:
+        logger.error(f"선수 기록 크롤링 중 오류: {e}")
+
+def run_team_rankings_crawling(target_date: str = None):
+    """팀 순위 및 승률 크롤링 실행"""
+    logger = logging.getLogger(__name__)
+    
+    date_info = target_date if target_date else "현재"
+    logger.info(f"=== 팀 순위 크롤링 시작: {date_info} ===")
+    
+    try:
+        # 팀 순위 크롤러 실행
+        rank_crawler = KboTeamRankCrawler()
+        team_rankings = rank_crawler.get_team_rankings(target_date)
+        rank_crawler.close()
+        
+        if not team_rankings:
+            logger.warning("수집된 팀 순위 정보가 없습니다")
+            return
+        
+        # 결과 출력
+        logger.info(f"크롤링된 팀 순위:")
+        for team in team_rankings:
+            logger.info(f"  {team['rank']}위: {team['teamName']} - "
+                       f"승률 {team['winRate']:.3f} ({team['wins']}승 {team['losses']}패 {team['draws']}무)")
+        
+        # Spring으로 전송
+        data_sender = KboDataSender()
+        success = data_sender.send_team_rankings_to_spring(team_rankings, target_date)
+        
+        if success:
+            logger.info(f"✅ 팀 순위 크롤링 완료: {len(team_rankings)}개 팀")
+        else:
+            logger.error("❌ 팀 순위 전송 실패")
+            
+    except Exception as e:
+        logger.error(f"팀 순위 크롤링 중 오류: {e}")
+
+def run_team_winrates_only(target_date: str = None):
+    """팀 승률만 크롤링 (빠른 버전)"""
+    logger = logging.getLogger(__name__)
+    
+    date_info = target_date if target_date else "현재"
+    logger.info(f"=== 팀 승률 크롤링 시작: {date_info} ===")
+    
+    try:
+        # 팀 승률 크롤러 실행
+        rank_crawler = KboTeamRankCrawler()
+        winrates = rank_crawler.crawl_team_winrates(target_date or datetime.now().strftime("%Y-%m-%d"))
+        rank_crawler.close()
+        
+        if not winrates:
+            logger.warning("수집된 팀 승률 정보가 없습니다")
+            return
+        
+        # 결과 출력
+        logger.info(f"크롤링된 팀 승률:")
+        for team_data in winrates:
+            logger.info(f"  {team_data['team']}: {team_data['winRate']:.3f}")
+        
+        # Spring으로 전송 (승률만)
+        data_sender = KboDataSender()
+        success = data_sender.send_team_winrates_to_spring(winrates, target_date)
+        
+        if success:
+            logger.info(f"✅ 팀 승률 크롤링 완료: {len(winrates)}개 팀")
+        else:
+            logger.error("❌ 팀 승률 전송 실패")
+            
+    except Exception as e:
+        logger.error(f"팀 승률 크롤링 중 오류: {e}")
+
+def run_full_pipeline(date: str):
+    """전체 파이프라인 실행 (기존 호환성 유지)"""
+    logger = logging.getLogger(__name__)
+    logger.info(f"=== 전체 파이프라인 시작: {date} ===")
+    
+    # 일일 업데이트와 동일한 로직
+    run_daily_update(date)
 
 if __name__ == "__main__":
     main()
