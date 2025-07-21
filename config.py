@@ -1,9 +1,12 @@
 # config.py
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
 # .env 파일 불러오기
-load_dotenv()
+
+env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
 
 class config:
     SPRING_API_BASE_URL = os.getenv("SPRING_API_BASE_URL")

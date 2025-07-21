@@ -21,6 +21,7 @@ class KboDataSender:
             'Accept': 'application/json'
         }
         
+        
     def send_monthly_schedule_to_spring(self, games: List[Dict], year_month: str) -> bool:
         """
         월별 경기 일정을 Spring Boot로 전송
