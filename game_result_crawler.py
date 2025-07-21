@@ -78,6 +78,7 @@ class KboGameResultCrawler:
                         if game:
                             games.append(game)
                             logger.info(f"첫 번째 경기 결과 파싱: {game['awayTeam']} {game['awayScore']}-{game['homeScore']} {game['homeTeam']}")
+                            logger.info(f"[시간 로그] date={date_string}, time={game['gameDateTime']}, gameId={game['gameId']}")
                     
                     # 시간만 있는 행 (두 번째 이후 경기)
                     elif re.match(r"\d{2}:\d{2}", first_td) and is_target_date:
@@ -85,6 +86,7 @@ class KboGameResultCrawler:
                         if game:
                             games.append(game)
                             logger.info(f"후속 경기 결과 파싱: {game['awayTeam']} {game['awayScore']}-{game['homeScore']} {game['homeTeam']}")
+                            logger.info(f"[시간 로그] date={date_string}, time={game['gameDateTime']}, gameId={game['gameId']}")
                 
                 except Exception as e:
                     logger.error(f"Row {row_index} 결과 파싱 실패: {e}")
@@ -230,6 +232,7 @@ class KboGameResultCrawler:
                 "status": "COMPLETED"  # 상태: 완료
             }
             
+            logger.debug(f"경기 시간 확인: date={date}, time={time}, gameDateTime={result['gameDateTime']}")
             logger.debug(f"경기 결과 파싱 완료: {away_team} {away_score_int}-{home_score_int} {home_team}, gameId: {game_id}")
             return result
         

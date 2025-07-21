@@ -1,23 +1,18 @@
+# config.py
 import os
 from dotenv import load_dotenv
 
-# .env 파일 로드 (있다면)
+# .env 파일 불러오기
 load_dotenv()
 
-class Config:
-    """설정 클래스"""
-    
-    # Spring Boot API 설정
-    SPRING_API_BASE_URL = os.getenv('SPRING_API_BASE_URL', 'http://localhost:8080')
-    
-    # MySQL 데이터베이스 설정
-    DB_CONFIG = {
-        'host': os.getenv('DB_HOST', 'localhost'),
-        'user': os.getenv('DB_USER', 'root'),
-        'password': os.getenv('DB_PASSWORD', 'pw930516'),
-        'database': os.getenv('DB_NAME', 'inningLog'),
-        'charset': 'utf8mb4'
-    }
+class config:
+    SPRING_API_BASE_URL = os.getenv("SPRING_API_BASE_URL")
+    DB_HOST = os.getenv("DB_HOST")
+    DB_USER = os.getenv("DB_USER")
+    DB_PASSWORD = os.getenv("DB_PASSWORD")
+    DB_NAME = os.getenv("DB_NAME")
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    # 필요한 값 추가
     
     # ChromeDriver 설정
     CHROME_DRIVER_PATH = os.getenv('CHROME_DRIVER_PATH', None)  # None이면 자동 탐지
@@ -30,4 +25,4 @@ class Config:
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
 # 사용 예시를 위한 인스턴스
-config = Config()
+config = config()

@@ -18,6 +18,7 @@ from player_stats_crawler import KboPlayerStatsCrawler
 from team_rank_crawler import KboTeamRankCrawler
 from data_sender import KboDataSender
 
+
 def main():
     parser = argparse.ArgumentParser(description="KBO 데이터 크롤링 시스템")
     subparsers = parser.add_subparsers(dest='command', help='실행할 명령어')
