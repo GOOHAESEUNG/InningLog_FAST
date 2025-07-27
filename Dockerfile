@@ -2,9 +2,13 @@
 FROM debian:bullseye-slim AS chrome-builder
 
 # 필요한 패키지 설치
-RUN apt-get update && apt-get install -y wget unzip curl gnupg ca-certificates libglib2.0-0 libnss3 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 xdg-utils --no-install-recommends
+RUN apt-get update && apt-get install -y \
+    wget unzip curl gnupg ca-certificates \
+    libglib2.0-0 libnss3 libx11-xcb1 libxcomposite1 libxdamage1 \
+    libxrandr2 libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    libxkbcommon0 libpango-1.0-0 libcairo2 xdg-utils --no-install-recommends
 
-# Chrome 설치 (126 버전)
+# Chrome 설치
 RUN mkdir -p /opt/chrome && \
     wget -q https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.114/linux64/chrome-linux64.zip && \
     unzip chrome-linux64.zip && \
@@ -19,8 +23,12 @@ RUN wget -q https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/126.0.64
 # ========== 2단계: 실제 실행할 FastAPI 앱 + 크롬 복사 ==========
 FROM python:3.10-slim
 
-# 기본 패키지 설치
-RUN apt-get update && apt-get install -y libglib2.0-0 libnss3 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 xdg-utils curl && apt-get clean
+# 필요한 패키지 설치
+RUN apt-get update && apt-get install -y \
+    libglib2.0-0 libnss3 libx11-xcb1 libxcomposite1 libxdamage1 \
+    libxrandr2 libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    xdg-utils curl libxkbcommon0 libpango-1.0-0 libcairo2 \
+ && apt-get clean
 
 # 크롬 & 드라이버 복사
 COPY --from=chrome-builder /opt/chrome/chrome126 /opt/chrome/chrome126
